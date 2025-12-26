@@ -1,61 +1,51 @@
 name: release
 
 on:
-
   push:
     tags:
       - "v*"
-  workflow_dispatch:
+
 jobs:
   linux:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - x86_64-unknown-linux-musl
-          - armv7-unknown-linux-gnueabihf
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install cross
-        run: cargo install cross
 
       - name: Build
-        run: cross build --release --target ${{ matrix.target }}
+        run: cargo build --release
+
+      - name: Rename binary
+        run: |
+          mv target/release/myapp myapp-x86_64-unknown-linux-gnu
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: myapp-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/myapp
+          name: linux
+          path: myapp-x86_64-unknown-linux-gnu
 
   macos:
     runs-on: macos-latest
-    strategy:
-      matrix:
-        target:
-          - x86_64-apple-darwin
-          - aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build (Apple Silicon)
+        run: cargo build --release --target aarch64-apple-darwin
 
-      - name: Upload artifact
+      - name: Build (Intel)
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: myapp-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/myapp
+          name: macos
+          path: |
+            target/aarch64-apple-darwin/release/myapp
+            target/x86_64-apple-darwin/release/myapp
 
   windows:
     runs-on: windows-latest
@@ -63,45 +53,28 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
 
       - name: Build
-        run: cargo build --release --target x86_64-pc-windows-msvc
+        run: cargo build --release
+
+      - name: Rename binary
+        run: |
+          move target\release\myapp.exe myapp-x86_64-pc-windows-msvc.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: myapp-x86_64-pc-windows-msvc
-          path: target/x86_64-pc-windows-msvc/release/myapp.exe
-
-  freebsd:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: cross-rs/cross@v0.2.5
-        with:
-          target: x86_64-unknown-freebsd
-          args: --release
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: myapp-x86_64-unknown-freebsd
-          path: target/x86_64-unknown-freebsd/release/myapp
+          name: windows
+          path: myapp-x86_64-pc-windows-msvc.exe
 
   publish:
-    name: Publish GitHub Release
-    needs: [linux, macos, windows, freebsd]
+    needs: [linux, macos, windows]
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: dist
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*
