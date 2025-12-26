@@ -19,13 +19,13 @@ jobs:
 
       - name: Rename binary
         run: |
-          mv target/release/myapp myapp-x86_64-unknown-linux-gnu
+          mv target/release/trackerdl trackerdl-x86_64-unknown-linux-gnu
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: myapp-x86_64-unknown-linux-gnu
+          path: trackerdl-x86_64-unknown-linux-gnu
 
   macos:
     runs-on: macos-latest
@@ -45,8 +45,8 @@ jobs:
         with:
           name: macos
           path: |
-            target/aarch64-apple-darwin/release/myapp
-            target/x86_64-apple-darwin/release/myapp
+            target/aarch64-apple-darwin/release/trackerdl
+            target/x86_64-apple-darwin/release/trackerdl
 
   windows:
     runs-on: windows-latest
@@ -60,13 +60,13 @@ jobs:
 
       - name: Rename binary
         run: |
-          move target\release\myapp.exe myapp-x86_64-pc-windows-msvc.exe
+          move target\release\trackerdl.exe trackerdl-x86_64-pc-windows-msvc.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: myapp-x86_64-pc-windows-msvc.exe
+          path: trackerdl-x86_64-pc-windows-msvc.exe
 
   publish:
     needs: [linux, macos, windows]
