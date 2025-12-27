@@ -14,64 +14,64 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build
         run: cargo build --release
 
-      - name: Rename binary
-        run: |
-          mv target/release/trackerdl trackerdl-x86_64-unknown-linux-gnu
+      - name: Prepare binary
+        run: mv target/release/trackerdl trackerdl
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: trackerdl-x86_64-unknown-linux-gnu
+          path: trackerdl
 
   macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Build (Apple Silicon)
         run: cargo build --release --target aarch64-apple-darwin
-  
+
       - name: Build (Intel)
         run: cargo build --release --target x86_64-apple-darwin
 
-      - name: Upload artifacts
+      - name: Create universal binary (lipo)
+        run: |
+          lipo -create \
+            target/aarch64-apple-darwin/release/trackerdl \
+            target/x86_64-apple-darwin/release/trackerdl \
+            -output trackerdl
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: |
-            target/aarch64-apple-darwin/release/trackerdl
-            target/x86_64-apple-darwin/release/trackerdl
+          path: trackerdl
 
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build
         run: cargo build --release
 
-      - name: Rename binary
-        run: |
-          move target\release\trackerdl.exe trackerdl-x86_64-pc-windows-msvc.exe
+      - name: Prepare binary
+        run: move target\release\trackerdl.exe trackerdl.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: trackerdl-x86_64-pc-windows-msvc.exe
+          path: trackerdl.exe
 
   publish:
     needs: [linux, macos, windows]
@@ -81,6 +81,33 @@ jobs:
         with:
           path: dist
 
-      - uses: softprops/action-gh-release@v2
+      - name: Package release zips
+        run: |
+          mkdir release
+
+          mkdir linux
+          mv dist/linux/trackerdl linux/trackerdl
+          zip -j release/linux.zip linux/trackerdl
+
+          mkdir macos
+          mv dist/macos/trackerdl macos/trackerdl
+          zip -j release/macos.zip macos/trackerdl
+
+          mkdir windows
+          mv dist/windows/trackerdl.exe windows/trackerdl.exe
+          zip -j release/windows.zip windows/trackerdl.exe
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd release
+          sha256sum *.zip > SHA256SUMS
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          files: dist/**/*
+          files: |
+            release/*.zip
+            release/SHA256SUMS
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
