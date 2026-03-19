@@ -26,7 +26,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const API_BASE: &str = "https://tracker.israeli.ovh";
+const API_BASE: &str = "http://trackerapi-2.artistgrid.cx";
 const QOBUZ_API: &str = "https://qobuz.squid.wtf/api/download-music";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
