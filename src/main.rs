@@ -996,19 +996,22 @@ async fn download_track_with_progress(
     std::fs::create_dir_all(&era_dir)?;
 
     let ext = get_file_extension(&track.playable_url);
-    let filename = if cli.numbered {
+    let base_name = if cli.numbered {
         format!(
-            "{:03} - {}.{}",
+            "{:03} - {}",
             index + 1,
-            sanitize_filename::sanitize(&track.name),
-            ext
+            sanitize_filename::sanitize(&track.name)
         )
     } else {
-        format!("{}.{}", sanitize_filename::sanitize(&track.name), ext)
+        sanitize_filename::sanitize(&track.name)
     };
-    let path = era_dir.join(&filename);
 
-    if path.exists() && !cli.overwrite {
+    // The final filename embeds the host's own original filename (from
+    // Content-Disposition, learned only once the request is in flight), so
+    // existence is checked by prefix against what's already on disk instead
+    // of an exact path match — this still avoids downloading a track twice
+    // without needing the response first.
+    if !cli.overwrite && dir_has_prefixed_file(&era_dir, &base_name) {
         return Ok(false);
     }
 
@@ -1024,6 +1027,27 @@ async fn download_track_with_progress(
 
     if !response.status().is_success() {
         return Err(anyhow!("HTTP {}", response.status()));
+    }
+
+    let original_filename = response
+        .headers()
+        .get(reqwest::header::CONTENT_DISPOSITION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_content_disposition_filename);
+
+    let filename = match &original_filename {
+        Some(orig) => format!(
+            "{} <{}>.{}",
+            base_name,
+            sanitize_filename::sanitize(orig),
+            ext
+        ),
+        None => format!("{}.{}", base_name, ext),
+    };
+    let path = era_dir.join(&filename);
+
+    if path.exists() && !cli.overwrite {
+        return Ok(false);
     }
 
     let total_size = response.content_length();
@@ -1372,6 +1396,66 @@ async fn scrape_imgur(client: &Client, id: &str) -> Option<String> {
         }
     }
 
+    None
+}
+
+// Detects an already-downloaded track by filename prefix rather than exact
+// match, since the saved filename now has the host's original filename
+// appended after the sheet title (e.g. "Song <original>.mp3").
+fn dir_has_prefixed_file(dir: &PathBuf, prefix: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(prefix) {
+            return true;
+        }
+    }
+    false
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn parse_content_disposition_filename(value: &str) -> Option<String> {
+    if let Ok(re) = Regex::new(r#"filename\*\s*=\s*UTF-8''([^;]+)"#) {
+        if let Some(caps) = re.captures(value) {
+            let decoded = percent_decode(caps.get(1)?.as_str().trim());
+            if !decoded.is_empty() {
+                return Some(decoded);
+            }
+        }
+    }
+    if let Ok(re) = Regex::new(r#"filename\s*=\s*"([^"]+)""#) {
+        if let Some(caps) = re.captures(value) {
+            return Some(caps.get(1)?.as_str().to_string());
+        }
+    }
+    if let Ok(re) = Regex::new(r#"filename\s*=\s*([^;]+)"#) {
+        if let Some(caps) = re.captures(value) {
+            let name = caps.get(1)?.as_str().trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
     None
 }
 
