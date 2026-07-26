@@ -26,7 +26,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const API_BASE: &str = "http://trackerapi-2.artistgrid.cx";
+const API_BASE: &str = "https://trackerapi.artistgrid.cx";
 const QOBUZ_API: &str = "https://qobuz.squid.wtf/api/download-music";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -210,6 +210,161 @@ struct Track {
     url: Option<String>,
     #[serde(default)]
     available_length: Option<String>,
+}
+
+// trackerapi.artistgrid.cx (v3) response shapes. The v3 API serves a richer,
+// pre-parsed representation of the sheet than the old trackerapi-2 API did;
+// `adapt_v3_response`/`adapt_v3_flat_response` below fold it down into the
+// original `TrackerResponse`/`Era`/`Track` shape so the rest of this file
+// (TUI, batch download, stats) doesn't need to change.
+#[derive(Debug, Clone, Deserialize)]
+struct V3TrackName {
+    #[serde(default)]
+    raw: String,
+    #[serde(default)]
+    title: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct V3Link {
+    url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct V3Track {
+    name: V3TrackName,
+    #[serde(default)]
+    available_length: Option<String>,
+    #[serde(default)]
+    quality: Option<String>,
+    #[serde(default)]
+    links: Vec<V3Link>,
+    #[serde(default)]
+    sub_era: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct V3FlatTrack {
+    #[serde(flatten)]
+    track: V3Track,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct V3Era {
+    name: String,
+    #[serde(default)]
+    tracks: Vec<V3Track>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct V3Tab {
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct V3Response {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    tab: Option<V3Tab>,
+    #[serde(default)]
+    tabs: Vec<V3Tab>,
+    #[serde(default)]
+    eras: Vec<V3Era>,
+    #[serde(default)]
+    tracks: Vec<V3FlatTrack>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    code: Option<String>,
+}
+
+fn v3_track_to_track(v3: &V3Track) -> Track {
+    let name = if !v3.name.title.is_empty() {
+        v3.name.title.clone()
+    } else {
+        v3.name.raw.clone()
+    };
+    Track {
+        name,
+        quality: v3.quality.clone(),
+        url: v3.links.first().map(|l| l.url.clone()),
+        available_length: v3.available_length.clone(),
+    }
+}
+
+fn v3_tab_meta(v3: &V3Response) -> (Vec<String>, String) {
+    let current_tab = v3.tab.as_ref().map(|t| t.name.clone()).unwrap_or_default();
+    let mut tabs: Vec<String> = v3.tabs.iter().map(|t| t.name.clone()).collect();
+    if !current_tab.is_empty() && !tabs.contains(&current_tab) {
+        tabs.insert(0, current_tab.clone());
+    }
+    (tabs, current_tab)
+}
+
+fn adapt_v3_response(v3: V3Response) -> TrackerResponse {
+    let mut eras = IndexMap::new();
+    for (i, era) in v3.eras.iter().enumerate() {
+        let key = format!("{}:{}", i, era.name);
+        let mut grouped: IndexMap<String, Vec<Track>> = IndexMap::new();
+        for t in &era.tracks {
+            let group = t.sub_era.clone().unwrap_or_else(|| "Default".to_string());
+            grouped
+                .entry(group)
+                .or_insert_with(Vec::new)
+                .push(v3_track_to_track(t));
+        }
+        eras.insert(
+            key,
+            Era {
+                name: era.name.clone(),
+                data: if grouped.is_empty() { None } else { Some(grouped) },
+            },
+        );
+    }
+
+    let (tabs, current_tab) = v3_tab_meta(&v3);
+    TrackerResponse {
+        name: v3.name,
+        tabs,
+        current_tab,
+        eras,
+    }
+}
+
+fn adapt_v3_flat_response(v3: V3Response) -> TrackerResponse {
+    let flat: Vec<Track> = v3.tracks.iter().map(|ft| v3_track_to_track(&ft.track)).collect();
+    let mut grouped: IndexMap<String, Vec<Track>> = IndexMap::new();
+    grouped.insert("Default".to_string(), flat);
+    let mut eras = IndexMap::new();
+    eras.insert(
+        "_flat".to_string(),
+        Era {
+            name: String::new(),
+            data: Some(grouped),
+        },
+    );
+
+    let (tabs, current_tab) = v3_tab_meta(&v3);
+    TrackerResponse {
+        name: v3.name,
+        tabs,
+        current_tab,
+        eras,
+    }
+}
+
+fn url_encode_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone)]
@@ -441,8 +596,13 @@ impl App {
         self.log(format!("Fetching tracker ID: {}", self.tracker_id));
 
         let url = match &self.cli.tab {
-            Some(t) => format!("{}/get/{}?tab={}", API_BASE, self.tracker_id, t),
-            None => format!("{}/get/{}", API_BASE, self.tracker_id),
+            Some(t) => format!(
+                "{}/sh/{}/tab/{}",
+                API_BASE,
+                self.tracker_id,
+                url_encode_component(t)
+            ),
+            None => format!("{}/sh/{}/", API_BASE, self.tracker_id),
         };
 
         self.log(format!("API URL: {}", url));
@@ -450,17 +610,38 @@ impl App {
         let start = Instant::now();
         let response = self.client.get(&url).send().await?;
         let elapsed = start.elapsed();
+        let status = response.status();
 
-        self.log(format!("Response: {} in {:?}", response.status(), elapsed));
+        self.log(format!("Response: {} in {:?}", status, elapsed));
 
-        if !response.status().is_success() {
+        let bytes = response.bytes().await?;
+        let v3: V3Response = match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(e) => {
+                if !status.is_success() {
+                    return Err(anyhow!("Failed to load tracker: HTTP {}", status));
+                }
+                return Err(anyhow!("Failed to parse tracker response: {}", e));
+            }
+        };
+
+        if let Some(err) = &v3.error {
             return Err(anyhow!(
-                "Failed to load tracker: HTTP {}",
-                response.status()
+                "{} ({})",
+                err,
+                v3.code.as_deref().unwrap_or("ERROR")
             ));
         }
 
-        let data: TrackerResponse = response.json().await?;
+        if !status.is_success() {
+            return Err(anyhow!("Failed to load tracker: HTTP {}", status));
+        }
+
+        let data = if !v3.tracks.is_empty() {
+            adapt_v3_flat_response(v3)
+        } else {
+            adapt_v3_response(v3)
+        };
 
         let mut total_tracks = 0;
         let mut tracks_with_urls = 0;
