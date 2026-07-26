@@ -93,6 +93,9 @@ struct Cli {
     #[arg(short, long, help = "Specific tab name to load from tracker")]
     tab: Option<String>,
 
+    #[arg(long, help = "Specific tab gid to load from tracker (exact, overrides --tab)")]
+    gid: Option<String>,
+
     #[arg(long, help = "Skip TUI and download all tracks automatically (batch mode)")]
     no_tui: bool,
 
@@ -595,14 +598,22 @@ impl App {
         self.status = "Loading tracker...".to_string();
         self.log(format!("Fetching tracker ID: {}", self.tracker_id));
 
-        let url = match &self.cli.tab {
-            Some(t) => format!(
+        let url = if let Some(gid) = &self.cli.gid {
+            format!(
+                "{}/sh/{}/gid/{}",
+                API_BASE,
+                self.tracker_id,
+                url_encode_component(gid)
+            )
+        } else if let Some(t) = &self.cli.tab {
+            format!(
                 "{}/sh/{}/tab/{}",
                 API_BASE,
                 self.tracker_id,
                 url_encode_component(t)
-            ),
-            None => format!("{}/sh/{}/", API_BASE, self.tracker_id),
+            )
+        } else {
+            format!("{}/sh/{}/", API_BASE, self.tracker_id)
         };
 
         self.log(format!("API URL: {}", url));
