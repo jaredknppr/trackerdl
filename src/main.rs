@@ -1006,7 +1006,6 @@ async fn download_track_with_progress(
     };
     std::fs::create_dir_all(&era_dir)?;
 
-    let ext = get_file_extension(&track.playable_url);
     let base_name = if cli.numbered {
         format!(
             "{:03} - {}",
@@ -1045,6 +1044,24 @@ async fn download_track_with_progress(
         .get(reqwest::header::CONTENT_DISPOSITION)
         .and_then(|v| v.to_str().ok())
         .and_then(parse_content_disposition_filename);
+
+    // The resolved playable_url is a hash/ID endpoint with no real extension
+    // in it, so get_file_extension() on it always falls through to "mp3".
+    // Prefer the extension the host itself reports: the original filename's
+    // own extension first, then Content-Type, and only fall back to the URL
+    // heuristic if neither is available.
+    let ext = original_filename
+        .as_deref()
+        .and_then(extension_from_filename)
+        .or_else(|| {
+            response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(extension_from_content_type)
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| get_file_extension(&track.playable_url).to_string());
 
     let filename = match &original_filename {
         Some(orig) => format!(
@@ -1468,6 +1485,36 @@ fn parse_content_disposition_filename(value: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn extension_from_filename(name: &str) -> Option<String> {
+    const KNOWN: [&str; 10] = [
+        "mp3", "wav", "m4a", "flac", "ogg", "aac", "alac", "aiff", "wma", "opus",
+    ];
+    let ext = name.rsplit('.').next()?.to_lowercase();
+    if KNOWN.contains(&ext.as_str()) {
+        Some(ext)
+    } else {
+        None
+    }
+}
+
+fn extension_from_content_type(content_type: &str) -> Option<&'static str> {
+    let ct = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
+        .to_lowercase();
+    match ct.as_str() {
+        "audio/mpeg" | "audio/mp3" => Some("mp3"),
+        "audio/wav" | "audio/x-wav" | "audio/wave" | "audio/vnd.wave" => Some("wav"),
+        "audio/mp4" | "audio/x-m4a" | "audio/m4a" => Some("m4a"),
+        "audio/flac" | "audio/x-flac" => Some("flac"),
+        "audio/ogg" | "application/ogg" => Some("ogg"),
+        "audio/aac" | "audio/aacp" => Some("aac"),
+        _ => None,
+    }
 }
 
 fn get_file_extension(url: &str) -> &'static str {
